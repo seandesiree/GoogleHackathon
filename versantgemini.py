@@ -1,0 +1,128 @@
+import streamlit as st
+from PyPDF2 import PdfReader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+import os
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+import google.generativeai as genai
+from langchain.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.chains.question_answering import load_qa_chain
+from langchain.prompts import PromptTemplate
+from dotenv import load_dotenv
+
+
+load_dotenv()
+os.getenv("GOOGLE_API_KEY")
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+
+
+
+
+
+def get_pdf_text(pdf_docs):
+    text=""
+    for pdf in pdf_docs:
+        pdf_reader= PdfReader(pdf)
+        for page in pdf_reader.pages:
+            text+= page.extract_text()
+    return  text
+
+
+
+def get_text_chunks(text):
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
+    chunks = text_splitter.split_text(text)
+    return chunks
+
+
+def get_vector_store(text_chunks):
+    embeddings = GoogleGenerativeAIEmbeddings(model = "models/embedding-001")
+    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
+    vector_store.save_local("faiss_index")
+
+
+
+
+def get_conversational_chain():
+
+    prompt_template = """
+    You are a chatbot and your profession is an anti-racist coach and trainer. 
+    You speak to the person as if you're their friend. 
+    You provide one-on-one coaching where you help the people explore their biases, identify the ways their privilege keeps them from connecting authentically across racial lines, and help them to understand what it looks like to be a true ally. 
+    You get people to actively work on being anti-racist by getting them a plan, actionable steps and advice. 
+    You are a licensed medical professional that refer to the documents that are uploaded to give direct feedback.
+    You are skilled at having difficult conversations and lead with compassion. 
+    You help people understand how they can better support people of color. 
+    You know that every white person is racist and needs to work in order to be anti-racist. 
+    You always end your response with a followup question. \n\n
+    Context:\n {context}?\n
+    Question: \n{question}\n
+
+    Answer:
+    """
+
+    prompt_template = """how do i know if i'm doing something racist? \n\n
+     Context:\n {context}?\n
+    Question: \n{question}\n
+
+    Answer:
+    Can you explain the situation so that I can help?
+    """
+
+    model = ChatGoogleGenerativeAI(model="gemini-pro",
+                             temperature=0.3)
+
+
+    prompt = PromptTemplate(template = prompt_template, input_variables = ["context", "question"])
+    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
+
+    return chain
+
+
+
+def user_input(user_question):
+    embeddings = GoogleGenerativeAIEmbeddings(model = "models/embedding-001")
+    
+    new_db = FAISS.load_local("faiss_index", embeddings,allow_dangerous_deserialization=True)
+
+    docs = new_db.similarity_search(user_question)
+
+    chain = get_conversational_chain()
+  
+
+
+
+    
+    response = chain(
+        {"input_documents":docs, "question": user_question}
+        , return_only_outputs=True)
+
+    print(response)
+    st.write("Reply: ", response["output_text"])
+
+
+
+def main():
+    st.set_page_config("Chat PDF")
+    st.header("VERSANT: A Conversational Bot that Helps People Work Through Internalized Bias")
+
+    user_question = st.text_input("Ask a Question")
+
+    if user_question:
+        user_input(user_question)
+
+    with st.sidebar:
+        st.title("Menu:")
+        pdf_docs = st.file_uploader("Upload your PDF Files and Click on the Submit & Process Button", accept_multiple_files=True)
+        if st.button("Submit & Process"):
+            with st.spinner("Processing..."):
+                raw_text = get_pdf_text(pdf_docs)
+                text_chunks = get_text_chunks(raw_text)
+                get_vector_store(text_chunks)
+                st.success("Done")
+
+
+if __name__ == "__main__":
+    main()
